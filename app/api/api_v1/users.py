@@ -5,8 +5,11 @@ from app import models
 from app.database import get_db
 from app.api.deps import get_current_user
 from app.schemas.user import User as UserSchema
+from app.schemas.pagination import PaginatedResponse
 from app.services import face_service
 from app.utils.auth import get_password_hash, verify_password
+from fastapi import Query
+import math
 
 router = APIRouter(prefix="/api/user", tags=["Users"])
 
@@ -41,15 +44,33 @@ async def upload_face(
     return user
 
 
-@router.get("/history")
+@router.get("/history", response_model=PaginatedResponse[dict])
 async def get_attendance_history(
+    page: int = Query(1, ge=1),
+    size: int = Query(15, ge=1, le=100),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    history = db.query(models.Attendance).filter(
+    query = db.query(models.Attendance).filter(
         models.Attendance.user_id == current_user.id
-    ).order_by(models.Attendance.timestamp.desc()).all()
-    return history
+    )
+    
+    total = query.count()
+    history = query.order_by(models.Attendance.timestamp.desc())\
+        .offset((page - 1) * size).limit(size).all()
+    
+    # We use dict for history to match previous expected format or include 
+    # any extra fields if needed, or we could use an Attendance schema.
+    # Since the previous code returned models objects directly, 
+    # and FastAPI handles them, we'll return them as items.
+    
+    return {
+        "items": history,
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": math.ceil(total / size) if total > 0 else 1
+    }
 
 
 @router.post("/change-password")

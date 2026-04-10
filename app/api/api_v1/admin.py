@@ -10,18 +10,41 @@ from app import models
 from app.database import get_db
 from app.api.deps import get_admin_user
 from app.schemas.user import User as UserSchema, UserUpdate
+from app.schemas.pagination import PaginatedResponse
 from app.services import face_service
 from app.utils.auth import get_password_hash
+from sqlalchemy import or_
+import math
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
-@router.get("/users", response_model=List[UserSchema])
+@router.get("/users", response_model=PaginatedResponse[UserSchema])
 async def admin_get_all_users(
+    page: int = Query(1, ge=1),
+    size: int = Query(15, ge=1, le=100),
+    search: Optional[str] = Query(None),
     admin: models.User = Depends(get_admin_user),
     db: Session = Depends(get_db)
 ):
-    users = db.query(models.User).all()
-    return users
+    query = db.query(models.User)
+    
+    if search:
+        search_term = f"%{search.strip()}%"
+        query = query.filter(or_(
+            models.User.fullname.ilike(search_term),
+            models.User.username.ilike(search_term)
+        ))
+    
+    total = query.count()
+    users = query.offset((page - 1) * size).limit(size).all()
+    
+    return {
+        "items": users,
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": math.ceil(total / size) if total > 0 else 1
+    }
 
 
 @router.get("/user/{user_id}/logs")
@@ -42,30 +65,39 @@ from datetime import datetime, timedelta, timezone
 async def admin_get_all_logs(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(15, ge=1, le=100),
     admin: models.User = Depends(get_admin_user),
     db: Session = Depends(get_db)
 ):
     query = db.query(models.Attendance, models.User.fullname, models.User.username)\
         .join(models.User, models.Attendance.user_id == models.User.id)
     
+    if search:
+        search_term = f"%{search.strip()}%"
+        query = query.filter(or_(
+            models.User.fullname.ilike(search_term),
+            models.User.username.ilike(search_term)
+        ))
+
     # We assume the user is in WIB (UTC+7). 
-    # To filter by local date, we need to convert the range to UTC.
     if start_date and start_date.strip():
-        # Start of WIB day (00:00:00) -> UTC (Yesterday 17:00:00)
         local_start = datetime.strptime(start_date, "%Y-%m-%d")
         utc_start = local_start - timedelta(hours=7)
         query = query.filter(models.Attendance.timestamp >= utc_start)
         
     if end_date and end_date.strip():
-        # End of WIB day (23:59:59) -> UTC (Today 16:59:59)
         local_end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
         utc_end = local_end - timedelta(hours=7)
         query = query.filter(models.Attendance.timestamp < utc_end)
         
-    results = query.order_by(models.Attendance.timestamp.desc()).all()
+    total = query.count()
+    results = query.order_by(models.Attendance.timestamp.desc())\
+        .offset((page - 1) * size).limit(size).all()
     
     # Format output
-    return [
+    items = [
         {
             "id": log.Attendance.id,
             "user_id": log.Attendance.user_id,
@@ -77,6 +109,14 @@ async def admin_get_all_logs(
             "status": log.Attendance.status
         } for log in results
     ]
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": math.ceil(total / size) if total > 0 else 1
+    }
 
 
 @router.delete("/user/{user_id}")
