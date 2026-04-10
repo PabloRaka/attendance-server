@@ -137,8 +137,14 @@ async def attendance_face(
         )
 
     contents = await file.read()
-    # Async comparison using binary data from DB
-    similarity = await face_service.async_compare_faces(current_user.face_image, contents)
+    try:
+        # Async comparison using binary data from DB
+        similarity = await face_service.async_compare_faces(current_user.face_image, contents)
+    except face_service.LivenessError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=str(e)
+        )
 
     if similarity < settings.FACE_SIMILARITY_THRESHOLD:
         raise HTTPException(
