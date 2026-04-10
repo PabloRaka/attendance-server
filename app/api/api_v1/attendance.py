@@ -28,10 +28,24 @@ def record_attendance(db: Session, user_id: int, method: str):
     if last_attendance and last_attendance.attendance_type == "in":
         new_type = "out"
 
+    # Status logic for 'in' type
+    status = None
+    if new_type == "in":
+        # Get current time in WIB (UTC+7)
+        wib_timezone = timezone(timedelta(hours=7))
+        now_wib = datetime.now(wib_timezone)
+        
+        # Check if past 08:15
+        if now_wib.hour > 8 or (now_wib.hour == 8 and now_wib.minute > 15):
+            status = "terlambat"
+        else:
+            status = "tepat waktu"
+
     new_record = models.Attendance(
         user_id=user_id,
         method=method,
-        attendance_type=new_type
+        attendance_type=new_type,
+        status=status
     )
     db.add(new_record)
     db.commit()
@@ -57,7 +71,7 @@ async def attendance_qr(file: UploadFile = File(...), db: Session = Depends(get_
         raise HTTPException(status_code=404, detail=f"User {qr_data} not found")
 
     record = record_attendance(db, user.id, "qr_scan")
-    return {"status": "success", "user": user.fullname, "type": record.attendance_type, "time": record.timestamp}
+    return {"status": "success", "user": user.fullname, "type": record.attendance_type, "time": record.timestamp, "attendance_status": record.status}
 
 
 @router.get("/token")
@@ -102,7 +116,8 @@ async def verify_token(
         "status": "success", 
         "user": current_user.fullname, 
         "type": record.attendance_type, 
-        "time": record.timestamp
+        "time": record.timestamp,
+        "attendance_status": record.status
     }
 
 
@@ -137,5 +152,6 @@ async def attendance_face(
         "user": current_user.fullname,
         "type": record.attendance_type,
         "time": record.timestamp,
-        "similarity": round(similarity, 3)
+        "similarity": round(similarity, 3),
+        "attendance_status": record.status
     }

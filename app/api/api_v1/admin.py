@@ -1,4 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from typing import Optional, List
@@ -32,7 +36,7 @@ async def admin_get_user_logs(
     return logs
 
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 @router.get("/logs")
 async def admin_get_all_logs(
@@ -69,7 +73,8 @@ async def admin_get_all_logs(
             "fullname": log.fullname,
             "timestamp": log.Attendance.timestamp,
             "method": log.Attendance.method,
-            "attendance_type": log.Attendance.attendance_type
+            "attendance_type": log.Attendance.attendance_type,
+            "status": log.Attendance.status
         } for log in results
     ]
 
@@ -180,13 +185,128 @@ async def admin_force_attendance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Status logic for 'in' type
+    status = None
+    if attendance_type == "in":
+        # Get current time in WIB (UTC+7)
+        wib_timezone = timezone(timedelta(hours=7))
+        now_wib = datetime.now(wib_timezone)
+        
+        # Check if past 08:15
+        if now_wib.hour > 8 or (now_wib.hour == 8 and now_wib.minute > 15):
+            status = "terlambat"
+        else:
+            status = "tepat waktu"
+
     new_record = models.Attendance(
         user_id=user.id,
         method="admin_force",
-        attendance_type=attendance_type
+        attendance_type=attendance_type,
+        status=status
     )
     db.add(new_record)
     db.commit()
     return {"status": "success", "message": f"Attendance {attendance_type} forced for {user.username}"}
+
+
+@router.get("/export-excel")
+async def admin_export_excel(
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    admin: models.User = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Admin-only: Export attendance logs to an Excel file with date and search filtering."""
+    query = db.query(models.Attendance, models.User.fullname, models.User.username)\
+        .join(models.User, models.Attendance.user_id == models.User.id)
+    
+    if search and search.strip():
+        search_term = f"%{search.strip()}%"
+        from sqlalchemy import or_
+        query = query.filter(or_(
+            models.User.fullname.ilike(search_term),
+            models.User.username.ilike(search_term)
+        ))
+    
+    if start_date and start_date.strip():
+        local_start = datetime.strptime(start_date, "%Y-%m-%d")
+        utc_start = local_start - timedelta(hours=7)
+        query = query.filter(models.Attendance.timestamp >= utc_start)
+        
+    if end_date and end_date.strip():
+        local_end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        utc_end = local_end - timedelta(hours=7)
+        query = query.filter(models.Attendance.timestamp < utc_end)
+        
+    results = query.order_by(models.Attendance.timestamp.desc()).all()
+
+    # Create Excel Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Rekap Absensi"
+
+    # Header
+    headers = ["No", "Nama Lengkap", "Username", "Tanggal", "Jam (WIB)", "Tipe", "Status", "Metode"]
+    ws.append(headers)
+    
+    # Header Styling
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    # Data Rows
+    for i, res in enumerate(results, start=1):
+        # res.Attendance.timestamp is UTC
+        # Convert to local WIB for display
+        local_time = res.Attendance.timestamp + timedelta(hours=7)
+        
+        row = [
+            i,
+            res.fullname,
+            res.username,
+            local_time.strftime("%d-%m-%Y"),
+            local_time.strftime("%H:%M"),
+            "Masuk" if res.Attendance.attendance_type == "in" else "Keluar",
+            res.Attendance.status or "-",
+            res.Attendance.method.replace("_", " ").title() if res.Attendance.method else "-"
+        ]
+        ws.append(row)
+
+    # Auto-adjust column widths
+    for col in ws.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        ws.column_dimensions[column].width = adjusted_width
+
+    # Save to memory buffer
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    filename = f"rekap_absensi_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+from app.tasks import perform_auto_checkout
+
+@router.post("/trigger-auto-checkout")
+async def admin_trigger_auto_checkout(
+    admin: models.User = Depends(get_admin_user)
+):
+    """Admin-only: Manually trigger the 23:00 WIB auto check-out logic for testing."""
+    count = await perform_auto_checkout()
+    return {"status": "success", "message": f"Auto check-out processed for {count} users"}
 
 

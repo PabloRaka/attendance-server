@@ -34,6 +34,7 @@ class Attendance(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     method = Column(String) # 'face' or 'qr'
     attendance_type = Column(String) # 'in' or 'out'
+    status = Column(String, nullable=True) # 'terlambat' or 'tepat waktu'
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
 class QRChallenge(Base):

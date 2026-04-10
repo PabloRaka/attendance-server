@@ -30,7 +30,7 @@ app = FastAPI(title="Modern Attendance System")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -43,6 +43,13 @@ app.include_router(auth.router)
 app.include_router(attendance.router)
 app.include_router(users.router)
 app.include_router(admin.router)
+
+from .tasks import scheduler_loop
+
+@app.on_event("startup")
+async def startup_event():
+    # Start the background task
+    asyncio.create_task(scheduler_loop())
 
 @app.get("/")
 async def root():
