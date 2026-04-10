@@ -1,0 +1,32 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+
+# Build artifacts / packaging
+build/
+dist/
+*.egg-info/
+
+# Testing / coverage
+.pytest_cache/
+htmlcov/
+.coverage*
+
+# Type checker caches
+.mypy_cache/
+.pyre/
+
+# IDE / tooling
+.idea/
+.vscode/
+.agents/
+
+# OS files
+.DS_Store
