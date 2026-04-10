@@ -111,6 +111,8 @@ FastAPI event `startup` otomatis menjalankan `scheduler_loop()` sehingga auto ch
 - **Buat Admin Pertama**
   ```bash
   cd backend
+  python app/utils/create_admin.py
+  or 
   python app/utils/create_admin.py <username> <password> "Full Name"
   ```
   Jika argumen kosong script akan meminta input interaktif dan membuat/replace user role `admin`.
