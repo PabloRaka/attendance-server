@@ -2,6 +2,8 @@
 
 Backend absensi modern berbasis **FastAPI** dengan kombinasi **Face Recognition + QR Challenge**. Proses identifikasi wajah berjalan asynchronous, foto wajah disimpan sebagai binary di database, dan terdapat scheduler otomatis untuk melakukan auto check-out setiap malam.
 
+**Frontend Repository**: [attendance-client](https://github.com/PabloRaka/attendance-client.git)
+
 ---
 
 ## ✨ Fitur Utama
