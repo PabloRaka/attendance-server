@@ -138,13 +138,8 @@ async def attendance_face(
 
     contents = await file.read()
     try:
-        # Fetch stored face from S3
-        stored_binary = s3_service.download_file(current_user.face_image)
-        if not stored_binary:
-            raise HTTPException(status_code=500, detail="Gagal mengambil foto referensi dari S3")
-
-        # Async comparison using binary data from S3
-        similarity = await face_service.async_compare_faces(stored_binary, contents)
+        # Comparison using binary data directly from DB
+        similarity = await face_service.async_compare_faces(current_user.face_image, contents)
     except face_service.LivenessError as e:
         raise HTTPException(
             status_code=403,

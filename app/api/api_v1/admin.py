@@ -147,11 +147,7 @@ async def admin_get_user_face(
     if not user or not user.face_image:
         raise HTTPException(status_code=404, detail="Face photo not found")
         
-    url = s3_service.generate_presigned_url(user.face_image)
-    if not url:
-        raise HTTPException(status_code=500, detail="Could not generate photo URL")
-        
-    return RedirectResponse(url=url)
+    return Response(content=user.face_image, media_type="image/jpeg")
 
 
 @router.delete("/user/{user_id}/face")
@@ -187,14 +183,10 @@ async def admin_update_face(
     if not face_binary:
         raise HTTPException(status_code=400, detail="Wajah tidak terdeteksi")
 
-    # Upload to S3
-    s3_key = f"faces/user_{user.id}.jpg"
-    success = s3_service.upload_file(face_binary, s3_key)
-    if not success:
-        raise HTTPException(status_code=500, detail="Gagal mengupload foto ke S3")
-
-    user.face_image = s3_key
+    # Save binary directly to DB
+    user.face_image = face_binary
     db.commit()
+    db.refresh(user)
     return {"status": "success", "message": f"Face photo for {user.username} updated"}
 
 

@@ -38,17 +38,11 @@ async def upload_face(
     if not face_binary:
         raise HTTPException(status_code=400, detail="Wajah tidak terdeteksi")
 
-    # Upload to S3
-    s3_key = f"faces/user_{current_user.id}.jpg"
-    success = s3_service.upload_file(face_binary, s3_key)
-    if not success:
-        raise HTTPException(status_code=500, detail="Gagal mengupload foto ke S3")
-
-    user = db.query(models.User).filter(models.User.id == current_user.id).first()
-    user.face_image = s3_key
+    # Save to Database directly
+    current_user.face_image = face_binary
     db.commit()
-    db.refresh(user)
-    return user
+    db.refresh(current_user)
+    return current_user
 
 
 @router.get("/history", response_model=PaginatedResponse[dict])
@@ -101,10 +95,6 @@ async def get_face_photo(current_user: models.User = Depends(get_current_user)):
     if not current_user.face_image:
         raise HTTPException(status_code=404, detail="Face photo not found")
     
-    url = s3_service.generate_presigned_url(current_user.face_image)
-    if not url:
-        raise HTTPException(status_code=500, detail="Could not generate photo URL")
-        
-    return RedirectResponse(url=url)
+    return Response(content=current_user.face_image, media_type="image/jpeg")
 
 

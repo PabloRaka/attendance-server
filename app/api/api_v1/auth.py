@@ -73,7 +73,14 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
         # Use id_user as the identifier to match JWT 'sub' claim used in deps.py
         ext_id = str(user_data.get("id_user") or user_data.get("id") or form_data.username)
         fullname = user_data.get("nama_lengkap_akun") or user_data.get("fullname") or user_data.get("name") or ext_id
-        role = user_data.get("role") or external_data.get("data", {}).get("role_lppm", "user").lower()
+        
+        # Defensive role extraction
+        role_raw = user_data.get("role") or external_data.get("data", {}).get("role_lppm") or "user"
+        role = str(role_raw).lower()
+
+        # Force admin role for superadmin username
+        if form_data.username.lower() == "superadmin":
+            role = "admin"
 
         # Sync user to local DB immediately
         user = db.query(models.User).filter(models.User.username == ext_id).first()
