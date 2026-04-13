@@ -10,12 +10,16 @@ from sqlalchemy import func as sql_func
 from app import models
 from app.database import get_db
 from app.api.deps import get_current_user, get_admin_user
-from app.services import face_service, s3_service
+from app.services import face_service, s3_service, location_service
 from app.core.config import settings
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
-def record_attendance(db: Session, user_id: int, method: str):
+async def record_attendance(db: Session, user_id: int, method: str, latitude: str = None, longitude: str = None):
+    location_name = None
+    if latitude and longitude:
+        location_name = await location_service.get_address_from_coords(latitude, longitude)
+
     today = date.today()
     # Find last attendance for today
     last_attendance = db.query(models.Attendance).filter(
@@ -45,7 +49,10 @@ def record_attendance(db: Session, user_id: int, method: str):
         user_id=user_id,
         method=method,
         attendance_type=new_type,
-        status=status
+        status=status,
+        latitude=latitude,
+        longitude=longitude,
+        location_name=location_name
     )
     db.add(new_record)
     db.commit()
@@ -70,7 +77,7 @@ async def attendance_qr(file: UploadFile = File(...), db: Session = Depends(get_
     if not user:
         raise HTTPException(status_code=404, detail=f"User {qr_data} not found")
 
-    record = record_attendance(db, user.id, "qr_scan")
+    record = await record_attendance(db, user.id, "qr_scan")
     return {"status": "success", "user": user.fullname, "type": record.attendance_type, "time": record.timestamp, "attendance_status": record.status}
 
 
@@ -106,7 +113,7 @@ async def verify_token(
         raise HTTPException(status_code=400, detail="Invalid or expired QR code")
 
     # Record attendance for the user who IS SCANNING
-    record = record_attendance(db, current_user.id, "mobile_scan")
+    record = await record_attendance(db, current_user.id, "mobile_scan")
     
     # Optional: Delete or mark challenge as used
     db.delete(challenge)
@@ -124,6 +131,8 @@ async def verify_token(
 @router.post("/face")
 async def attendance_face(
     file: UploadFile = File(...),
+    latitude: str = Form(None),
+    longitude: str = Form(None),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -152,7 +161,7 @@ async def attendance_face(
             detail=f"Wajah tidak cocok (similarity: {similarity:.0%}). Dibutuhkan minimal {settings.FACE_SIMILARITY_THRESHOLD:.0%}. Pastikan pencahayaan baik."
         )
 
-    record = record_attendance(db, current_user.id, "face_recognition")
+    record = await record_attendance(db, current_user.id, "face_recognition", latitude, longitude)
     return {
         "status": "success",
         "user": current_user.fullname,
