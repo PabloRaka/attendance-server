@@ -106,7 +106,10 @@ async def admin_get_all_logs(
             "timestamp": log.Attendance.timestamp,
             "method": log.Attendance.method,
             "attendance_type": log.Attendance.attendance_type,
-            "status": log.Attendance.status
+            "status": log.Attendance.status,
+            "latitude": log.Attendance.latitude,
+            "longitude": log.Attendance.longitude,
+            "location_name": log.Attendance.location_name
         } for log in results
     ]
 
@@ -290,7 +293,7 @@ async def admin_export_excel(
     ws.title = "Rekap Absensi"
 
     # Header
-    headers = ["No", "Nama Lengkap", "Username", "Tanggal", "Jam (WIB)", "Tipe", "Status", "Metode"]
+    headers = ["No", "Nama Lengkap", "Username", "Tanggal", "Jam (WIB)", "Tipe", "Status", "Metode", "Lokasi"]
     ws.append(headers)
     
     # Header Styling
@@ -311,7 +314,8 @@ async def admin_export_excel(
             local_time.strftime("%H:%M"),
             "Masuk" if res.Attendance.attendance_type == "in" else "Keluar",
             res.Attendance.status or "-",
-            res.Attendance.method.replace("_", " ").title() if res.Attendance.method else "-"
+            res.Attendance.method.replace("_", " ").title() if res.Attendance.method else "-",
+            res.Attendance.location_name or (f"{res.Attendance.latitude}, {res.Attendance.longitude}" if res.Attendance.latitude else "-")
         ]
         ws.append(row)
 

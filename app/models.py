@@ -35,6 +35,9 @@ class Attendance(Base):
     method = Column(String) # 'face' or 'qr'
     attendance_type = Column(String) # 'in' or 'out'
     status = Column(String, nullable=True) # 'terlambat' or 'tepat waktu'
+    latitude = Column(String, nullable=True)
+    longitude = Column(String, nullable=True)
+    location_name = Column(String, nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
 class QRChallenge(Base):

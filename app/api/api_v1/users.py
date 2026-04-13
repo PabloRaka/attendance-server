@@ -60,13 +60,23 @@ async def get_attendance_history(
     history = query.order_by(models.Attendance.timestamp.desc())\
         .offset((page - 1) * size).limit(size).all()
     
-    # We use dict for history to match previous expected format or include 
-    # any extra fields if needed, or we could use an Attendance schema.
-    # Since the previous code returned models objects directly, 
-    # and FastAPI handles them, we'll return them as items.
-    
+    # Convert models to dicts to avoid ResponseValidationError with PaginatedResponse[dict]
+    items = [
+        {
+            "id": h.id,
+            "user_id": h.user_id,
+            "timestamp": h.timestamp,
+            "method": h.method,
+            "attendance_type": h.attendance_type,
+            "status": h.status,
+            "latitude": h.latitude,
+            "longitude": h.longitude,
+            "location_name": h.location_name
+        } for h in history
+    ]
+
     return {
-        "items": history,
+        "items": items,
         "total": total,
         "page": page,
         "size": size,
