@@ -19,7 +19,7 @@ class User(Base):
     fullname = Column(String)
     hashed_password = Column(String)
     role = Column(String, default=UserRole.USER)
-    face_image = Column(LargeBinary, nullable=True)  # Stored face binary data (JPEG)
+    face_image = Column(LargeBinary, nullable=True)  # Stored face binary data
 
     @property
     def has_face(self) -> bool:

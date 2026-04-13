@@ -6,9 +6,10 @@ from app.database import get_db
 from app.api.deps import get_current_user
 from app.schemas.user import User as UserSchema
 from app.schemas.pagination import PaginatedResponse
-from app.services import face_service
+from app.services import face_service, s3_service
 from app.utils.auth import get_password_hash, verify_password
 from fastapi import Query
+from fastapi.responses import RedirectResponse
 import math
 
 router = APIRouter(prefix="/api/user", tags=["Users"])
@@ -37,11 +38,11 @@ async def upload_face(
     if not face_binary:
         raise HTTPException(status_code=400, detail="Wajah tidak terdeteksi")
 
-    user = db.query(models.User).filter(models.User.id == current_user.id).first()
-    user.face_image = face_binary
+    # Save to Database directly
+    current_user.face_image = face_binary
     db.commit()
-    db.refresh(user)
-    return user
+    db.refresh(current_user)
+    return current_user
 
 
 @router.get("/history", response_model=PaginatedResponse[dict])
@@ -90,9 +91,10 @@ async def change_password(
 
 @router.get("/face-photo")
 async def get_face_photo(current_user: models.User = Depends(get_current_user)):
-    """Serve the user's stored face photo from DB binary."""
+    """Serve the user's stored face photo via S3 presigned URL."""
     if not current_user.face_image:
         raise HTTPException(status_code=404, detail="Face photo not found")
+    
     return Response(content=current_user.face_image, media_type="image/jpeg")
 
 

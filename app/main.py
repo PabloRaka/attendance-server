@@ -29,7 +29,7 @@ app = FastAPI(title="Modern Attendance System")
 # Enable CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins_list,
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
