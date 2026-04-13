@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Query, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 import io
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -11,7 +11,7 @@ from app.database import get_db
 from app.api.deps import get_admin_user
 from app.schemas.user import User as UserSchema, UserUpdate
 from app.schemas.pagination import PaginatedResponse
-from app.services import face_service
+from app.services import face_service, s3_service
 from app.utils.auth import get_password_hash
 from sqlalchemy import or_
 import math
@@ -146,7 +146,12 @@ async def admin_get_user_face(
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user or not user.face_image:
         raise HTTPException(status_code=404, detail="Face photo not found")
-    return Response(content=user.face_image, media_type="image/jpeg")
+        
+    url = s3_service.generate_presigned_url(user.face_image)
+    if not url:
+        raise HTTPException(status_code=500, detail="Could not generate photo URL")
+        
+    return RedirectResponse(url=url)
 
 
 @router.delete("/user/{user_id}/face")
@@ -182,7 +187,13 @@ async def admin_update_face(
     if not face_binary:
         raise HTTPException(status_code=400, detail="Wajah tidak terdeteksi")
 
-    user.face_image = face_binary
+    # Upload to S3
+    s3_key = f"faces/user_{user.id}.jpg"
+    success = s3_service.upload_file(face_binary, s3_key)
+    if not success:
+        raise HTTPException(status_code=500, detail="Gagal mengupload foto ke S3")
+
+    user.face_image = s3_key
     db.commit()
     return {"status": "success", "message": f"Face photo for {user.username} updated"}
 

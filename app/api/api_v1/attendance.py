@@ -10,7 +10,7 @@ from sqlalchemy import func as sql_func
 from app import models
 from app.database import get_db
 from app.api.deps import get_current_user, get_admin_user
-from app.services import face_service
+from app.services import face_service, s3_service
 from app.core.config import settings
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
@@ -138,8 +138,13 @@ async def attendance_face(
 
     contents = await file.read()
     try:
-        # Async comparison using binary data from DB
-        similarity = await face_service.async_compare_faces(current_user.face_image, contents)
+        # Fetch stored face from S3
+        stored_binary = s3_service.download_file(current_user.face_image)
+        if not stored_binary:
+            raise HTTPException(status_code=500, detail="Gagal mengambil foto referensi dari S3")
+
+        # Async comparison using binary data from S3
+        similarity = await face_service.async_compare_faces(stored_binary, contents)
     except face_service.LivenessError as e:
         raise HTTPException(
             status_code=403,

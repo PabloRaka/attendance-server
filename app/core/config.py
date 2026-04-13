@@ -62,6 +62,19 @@ class Settings(BaseSettings):
         os.getenv("FACE_SIMILARITY_THRESHOLD", "0.60")
     )
 
+    # S3 Configuration
+    S3_ACCESS_KEY_ID: str | None = os.getenv("S3_ACCESS_KEY_ID")
+    S3_SECRET_ACCESS_KEY: str | None = os.getenv("S3_SECRET_ACCESS_KEY")
+    S3_REGION: str = os.getenv("S3_DEFAULT_REGION", "ap-southeast-1")
+    S3_BUCKET: str | None = os.getenv("S3_BUCKET")
+    S3_ENDPOINT: str | None = os.getenv("S3_ENDPOINT")
+    S3_USE_PATH_STYLE_ENDPOINT: bool = os.getenv("S3_USE_PATH_STYLE_ENDPOINT", "false").lower() == "true"
+    S3_CDN_ENDPOINT: str | None = os.getenv("S3_CDN_ENDPOINT")
+
+    # External User Management API
+    USER_MANAGEMENT_API_URL: str = os.getenv("USER_MANAGEMENT_API_URL", "https://newapidevkiismanajemenuser.ibik.ac.id").rstrip("/")
+
+
     DIALECT_DRIVER_MAP: ClassVar[dict[str, str]] = {
         "postgres": "postgresql+psycopg2",
         "postgresql": "postgresql+psycopg2",

@@ -6,9 +6,10 @@ from app.database import get_db
 from app.api.deps import get_current_user
 from app.schemas.user import User as UserSchema
 from app.schemas.pagination import PaginatedResponse
-from app.services import face_service
+from app.services import face_service, s3_service
 from app.utils.auth import get_password_hash, verify_password
 from fastapi import Query
+from fastapi.responses import RedirectResponse
 import math
 
 router = APIRouter(prefix="/api/user", tags=["Users"])
@@ -37,8 +38,14 @@ async def upload_face(
     if not face_binary:
         raise HTTPException(status_code=400, detail="Wajah tidak terdeteksi")
 
+    # Upload to S3
+    s3_key = f"faces/user_{current_user.id}.jpg"
+    success = s3_service.upload_file(face_binary, s3_key)
+    if not success:
+        raise HTTPException(status_code=500, detail="Gagal mengupload foto ke S3")
+
     user = db.query(models.User).filter(models.User.id == current_user.id).first()
-    user.face_image = face_binary
+    user.face_image = s3_key
     db.commit()
     db.refresh(user)
     return user
@@ -90,9 +97,14 @@ async def change_password(
 
 @router.get("/face-photo")
 async def get_face_photo(current_user: models.User = Depends(get_current_user)):
-    """Serve the user's stored face photo from DB binary."""
+    """Serve the user's stored face photo via S3 presigned URL."""
     if not current_user.face_image:
         raise HTTPException(status_code=404, detail="Face photo not found")
-    return Response(content=current_user.face_image, media_type="image/jpeg")
+    
+    url = s3_service.generate_presigned_url(current_user.face_image)
+    if not url:
+        raise HTTPException(status_code=500, detail="Could not generate photo URL")
+        
+    return RedirectResponse(url=url)
 
 
