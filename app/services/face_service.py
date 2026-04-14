@@ -12,6 +12,7 @@ _ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets",
 _YUNET_PATH  = os.path.join(_ASSETS_DIR, "face_detection_yunet_2023mar.onnx")
 _SFACE_PATH  = os.path.join(_ASSETS_DIR, "face_recognition_sface_2021dec.onnx")
 _LIVENESS_PATH = os.path.join(_ASSETS_DIR, "MiniFASNetV2.onnx")
+_ai_semaphore = asyncio.Semaphore(2)
 
 # Validate model files exist
 if not os.path.exists(_YUNET_PATH):
@@ -222,42 +223,74 @@ def _process_binary_sync(image_bytes: bytes) -> bytes | None:
 
 async def process_and_crop_binary(image_bytes: bytes) -> bytes | None:
     """Async wrapper – offloads CPU work to a thread pool."""
-    return await asyncio.to_thread(_process_binary_sync, image_bytes)
+    async with _ai_semaphore:
+        return await asyncio.to_thread(_process_binary_sync, image_bytes)
 
 
-def _compare_faces_sync(stored_bytes: bytes, capture_bytes: bytes) -> float:
+def _extract_embedding_sync(image_bytes: bytes) -> np.ndarray | None:
+    """Extract 128-d face embedding from image bytes."""
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    
+    face_box = _detect_face(image)
+    if face_box is None:
+        return None
+        
+    return _align_and_encode(image, face_box)
+
+
+async def async_extract_embedding(image_bytes: bytes) -> bytes | None:
+    """Async wrapper for embedding extraction. Returns bytes of the numpy array."""
+    async with _ai_semaphore:
+        feat = await asyncio.to_thread(_extract_embedding_sync, image_bytes)
+        if feat is None:
+            return None
+        return feat.tobytes()
+
+
+def _compare_faces_sync(
+    stored_source: bytes, 
+    capture_bytes: bytes, 
+    is_embedding: bool = False
+) -> float:
     """
     Core synchronous comparison.
-    Returns cosine similarity in [0, 1], or 0.0 on error.
+    If is_embedding is True, stored_source is the raw float vector (bytes).
+    Otherwise, stored_source is the original profile image (bytes).
     """
     def _decode(b):
         arr = np.frombuffer(b, np.uint8)
         return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-    stored_img  = _decode(stored_bytes)
     capture_img = _decode(capture_bytes)
-
-    if stored_img is None or capture_img is None:
+    if capture_img is None:
         return 0.0
 
-    stored_box  = _detect_face(stored_img)
     capture_box = _detect_face(capture_img)
-
-    if stored_box is None or capture_box is None:
-        logger.warning(
-            "compare_faces: face not found – stored=%s capture=%s",
-            stored_box is None, capture_box is None,
-        )
+    if capture_box is None:
+        logger.warning("compare_faces: face not found in capture")
         return 0.0
 
-    feat_stored  = _align_and_encode(stored_img, stored_box)
     feat_capture = _align_and_encode(capture_img, capture_box)
-
-    if feat_stored is None or feat_capture is None:
+    if feat_capture is None:
         return 0.0
+
+    # Get stored feature
+    if is_embedding:
+        # stored_source is already the embedding vector
+        feat_stored = np.frombuffer(stored_source, dtype=np.float32).reshape(1, 128)
+    else:
+        # stored_source is the original image, must extract again (legacy/fallback)
+        stored_img = _decode(stored_source)
+        if stored_img is None: return 0.0
+        stored_box  = _detect_face(stored_img)
+        if stored_box is None: return 0.0
+        feat_stored  = _align_and_encode(stored_img, stored_box)
+        if feat_stored is None: return 0.0
 
     # ── Anti-Spoofing Check (LIVENESS) ──
-    # Only check liveness on the captured image, not the stored one.
     _check_liveness(capture_img, capture_box)
 
     sim = _cosine_similarity(feat_stored, feat_capture)
@@ -265,14 +298,19 @@ def _compare_faces_sync(stored_bytes: bytes, capture_bytes: bytes) -> float:
     return sim
 
 
-async def async_compare_faces(stored_bytes: bytes, capture_bytes: bytes) -> float:
-    """Async wrapper – offloads CPU work to a thread pool."""
-    return await asyncio.to_thread(_compare_faces_sync, stored_bytes, capture_bytes)
+async def async_compare_faces(
+    stored_source: bytes, 
+    capture_bytes: bytes, 
+    is_embedding: bool = False
+) -> float:
+    """Async wrapper – offloads CPU work to a thread pool with concurrency limit."""
+    async with _ai_semaphore:
+        return await asyncio.to_thread(_compare_faces_sync, stored_source, capture_bytes, is_embedding)
 
 
-# ── Legacy shim (used by older code paths that pass a numpy array) ─────────────
+# ── Legacy shim ───────────────────────────────────────────────────────────────
 def compare_faces_binary(stored_bytes: bytes, capture_array: np.ndarray) -> float:
-    """Kept for backward-compatibility. Encodes the array and delegates."""
+    """Kept for backward-compatibility."""
     success, buf = cv2.imencode(".jpg", capture_array)
     if not success:
         return 0.0

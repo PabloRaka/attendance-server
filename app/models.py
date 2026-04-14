@@ -20,6 +20,7 @@ class User(Base):
     hashed_password = Column(String)
     role = Column(String, default=UserRole.USER)
     face_image = Column(LargeBinary, nullable=True)  # Stored face binary data
+    face_embedding = Column(LargeBinary, nullable=True) # Stored 128-float vector binary
 
     @property
     def has_face(self) -> bool:

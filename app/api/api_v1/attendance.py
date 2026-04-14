@@ -147,8 +147,20 @@ async def attendance_face(
 
     contents = await file.read()
     try:
-        # Comparison using binary data directly from DB
-        similarity = await face_service.async_compare_faces(current_user.face_image, contents)
+        # Use cached embedding if available (much faster)
+        if current_user.face_embedding:
+            similarity = await face_service.async_compare_faces(
+                current_user.face_embedding, 
+                contents, 
+                is_embedding=True
+            )
+        else:
+            # Fallback for users who haven't migrated yet
+            similarity = await face_service.async_compare_faces(
+                current_user.face_image, 
+                contents, 
+                is_embedding=False
+            )
     except face_service.LivenessError as e:
         raise HTTPException(
             status_code=403,
