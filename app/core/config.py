@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     FACE_SIMILARITY_THRESHOLD: float = float(
         os.getenv("FACE_SIMILARITY_THRESHOLD", "0.60")
     )
+    FACE_LIVENESS_BLUR_THRESHOLD: float = float(
+        os.getenv("FACE_LIVENESS_BLUR_THRESHOLD", "5.0")
+    )
+    FACE_LIVENESS_MODEL_ENABLED: bool = (
+        os.getenv("FACE_LIVENESS_MODEL_ENABLED", "true").lower() == "true"
+    )
+    FACE_LIVENESS_MODEL_THRESHOLD: float = float(
+        os.getenv("FACE_LIVENESS_MODEL_THRESHOLD", "0.90")
+    )
 
     # S3 Configuration
     S3_ACCESS_KEY_ID: str | None = os.getenv("S3_ACCESS_KEY_ID")

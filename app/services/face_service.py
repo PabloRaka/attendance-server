@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import asyncio
 import logging
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -114,69 +115,79 @@ def _check_liveness(image: np.ndarray, face_box) -> bool:
     if roi_gray.size > 0:
         blur_score = cv2.Laplacian(roi_gray, cv2.CV_64F).var()
         logger.info("Liveness: Laplacian Variance = %.2f", blur_score)
-        # Lowered threshold to 5 to avoid false positives with softer cameras or low light.
-        if blur_score < 5:
+        # Lowered threshold to avoid false positives with softer cameras or low light.
+        # Threshold is now configurable via .env (FACE_LIVENESS_BLUR_THRESHOLD).
+        if blur_score < settings.FACE_LIVENESS_BLUR_THRESHOLD:
             logger.warning("Liveness: Laplacian check failed (score: %.2f)", blur_score)
             raise LivenessError("Kualitas foto rendah atau terdeteksi layar (Blur)")
 
-    # ── 2. MiniFASNetV2 (Deep Learning Anti-Spoofing) ──
-    try:
-        # Scale 2.7 crop as expected by the model
-        cx, cy = x_b + w_b / 2, y_b + h_b / 2
-        new_size = max(w_b, h_b) * 2.7
-        x1 = int(cx - new_size / 2)
-        y1 = int(cy - new_size / 2)
-        x2 = int(x1 + new_size)
-        y2 = int(y1 + new_size)
-        
-        # Crop and pad with black if out of bounds
-        xi1, yi1 = max(0, x1), max(0, y1)
-        xi2, yi2 = min(iw, x2), min(ih, y2)
-        
-        face_img = image[yi1:yi2, xi1:xi2]
-        if face_img.size == 0:
+        # ── 2. MiniFASNetV2 (Deep Learning Anti-Spoofing) ──
+        if not settings.FACE_LIVENESS_MODEL_ENABLED:
+            logger.info("Liveness: DL Model check disabled via config.")
             return True
 
-        # If crop was smaller than new_size, pad it
-        if xi2 - xi1 < x2 - x1 or yi2 - yi1 < y2 - y1:
-            pad_top = max(0, yi1 - y1)
-            pad_bottom = max(0, y2 - yi2)
-            pad_left = max(0, xi1 - x1)
-            pad_right = max(0, x2 - xi2)
-            face_img = cv2.copyMakeBorder(face_img, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=[0,0,0])
-
-        # Resize to 80x80 as expected
-        face_img = cv2.resize(face_img, (80, 80))
-        # model expects BGR, [0, 255], float32, NCHW
-        face_img = face_img.astype(np.float32)
-        
-        # Convert to NCHW format (1, 3, 80, 80)
-        blob = np.transpose(face_img, (2, 0, 1)) # HWC -> CHW
-        blob = np.expand_dims(blob, axis=0)      # CHW -> NCHW
-        
-        net = _get_liveness_net()
-        net.setInput(blob)
-        preds = net.forward() # Output shape (1, 3)
-        
-        # Simple softmax to log probabilities
-        probs = np.exp(preds[0]) / np.sum(np.exp(preds[0]))
-        label = np.argmax(preds[0])
-        score = probs[label]
-        
-        logger.info("Liveness: DL Model result = %d (prob: %.4f)", label, score)
-        
-        # In this model (yakhyo/Silent-Face-Anti-Spoofing), 1 is REAL.
-        if label != 1:
-            logger.warning("Liveness: DL Model detected SPOOF (label: %d, prob: %.4f)", label, score)
-            raise LivenessError("Kecurangan terdeteksi (Anti-Spoofing)")
+        try:
+            # Scale 2.7 crop as expected by the model
+            cx, cy = x_b + w_b / 2, y_b + h_b / 2
+            new_size = max(w_b, h_b) * 2.7
+            x1 = int(cx - new_size / 2)
+            y1 = int(cy - new_size / 2)
+            x2 = int(x1 + new_size)
+            y2 = int(y1 + new_size)
             
-    except LivenessError:
-        raise
-    except Exception as e:
-        logger.error("Liveness check error: %s", e)
-        return True
+            # Crop and pad with black if out of bounds
+            xi1, yi1 = max(0, x1), max(0, y1)
+            xi2, yi2 = min(iw, x2), min(ih, y2)
+            
+            face_img = image[yi1:yi2, xi1:xi2]
+            if face_img.size == 0:
+                return True
 
-    return True
+            # If crop was smaller than new_size, pad it
+            if xi2 - xi1 < x2 - x1 or yi2 - yi1 < y2 - y1:
+                pad_top = max(0, yi1 - y1)
+                pad_bottom = max(0, y2 - yi2)
+                pad_left = max(0, xi1 - x1)
+                pad_right = max(0, x2 - xi2)
+                face_img = cv2.copyMakeBorder(face_img, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=[0,0,0])
+
+            # Resize to 80x80 as expected
+            face_img = cv2.resize(face_img, (80, 80))
+            # model expects BGR, [0, 255], float32, NCHW
+            face_img = face_img.astype(np.float32)
+            
+            # Convert to NCHW format (1, 3, 80, 80)
+            blob = np.transpose(face_img, (2, 0, 1)) # HWC -> CHW
+            blob = np.expand_dims(blob, axis=0)      # CHW -> NCHW
+            
+            net = _get_liveness_net()
+            net.setInput(blob)
+            preds = net.forward() # Output shape (1, 3)
+            
+            # Softmax to log probabilities
+            probs = np.exp(preds[0]) / np.sum(np.exp(preds[0]))
+            label = np.argmax(preds[0])
+            score = probs[label]
+            
+            logger.info("Liveness: DL Model result = %d (prob: %.4f)", label, score)
+            
+            # In this model (yakhyo/Silent-Face-Anti-Spoofing), 1 is REAL.
+            # We only reject if label is NOT 1 AND our confidence (score) is above the threshold.
+            if label != 1:
+                if score >= settings.FACE_LIVENESS_MODEL_THRESHOLD:
+                    logger.warning("Liveness: DL Model detected SPOOF (label: %d, prob: %.4f) - REJECTED", label, score)
+                    raise LivenessError("Kecurangan terdeteksi (Anti-Spoofing)")
+                else:
+                    logger.info("Liveness: DL Model detected SPOOF (label: %d, prob: %.4f) but score < %.2f - ALLOWED", 
+                                label, score, settings.FACE_LIVENESS_MODEL_THRESHOLD)
+            
+        except LivenessError:
+            raise
+        except Exception as e:
+            logger.error("Liveness check error: %s", e)
+            return True
+
+        return True
 
 
 # ── Public API ────────────────────────────────────────────────────────────────────
