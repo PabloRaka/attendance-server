@@ -18,11 +18,13 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
+    external_auth_id = Column(String, unique=True, index=True, nullable=True)
     fullname = Column(String)
     hashed_password = Column(String)
     role = Column(String, default=UserRole.USER)
     face_image = Column(LargeBinary, nullable=True)  # Stored face binary data
     face_embedding = Column(LargeBinary, nullable=True) # Stored 128-float vector binary
+    has_seen_tutorial = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Relationships
     attendances = relationship("Attendance", back_populates="user", cascade="all, delete-orphan")

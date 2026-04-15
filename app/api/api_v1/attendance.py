@@ -15,22 +15,47 @@ from app.core.config import settings
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
+def get_today_attendance_state(db: Session, user_id: int, target_date: date = None):
+    target_date = target_date or date.today()
+    today_attendances = db.query(models.Attendance).filter(
+        models.Attendance.user_id == user_id,
+        sql_func.date(models.Attendance.timestamp) == target_date
+    ).order_by(models.Attendance.timestamp.asc()).all()
+
+    attendance_in = next((attendance for attendance in today_attendances if attendance.attendance_type == "in"), None)
+    attendance_out = next((attendance for attendance in today_attendances if attendance.attendance_type == "out"), None)
+    last_attendance = today_attendances[-1] if today_attendances else None
+
+    return {
+        "records": today_attendances,
+        "attendance_in": attendance_in,
+        "attendance_out": attendance_out,
+        "last_attendance": last_attendance,
+    }
+
+
+def resolve_next_attendance_type(db: Session, user_id: int, target_date: date = None) -> str:
+    attendance_state = get_today_attendance_state(db, user_id, target_date)
+
+    if attendance_state["attendance_in"] and attendance_state["attendance_out"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Anda sudah melakukan absen masuk dan keluar hari ini."
+        )
+
+    if attendance_state["last_attendance"] and attendance_state["last_attendance"].attendance_type == "in":
+        return "out"
+
+    return "in"
+
+
 async def record_attendance(db: Session, user_id: int, method: str, latitude: str = None, longitude: str = None):
+    today = date.today()
+    new_type = resolve_next_attendance_type(db, user_id, today)
+
     location_name = None
     if latitude and longitude:
         location_name = await location_service.get_address_from_coords(latitude, longitude)
-
-    today = date.today()
-    # Find last attendance for today
-    last_attendance = db.query(models.Attendance).filter(
-        models.Attendance.user_id == user_id,
-        sql_func.date(models.Attendance.timestamp) == today
-    ).order_by(models.Attendance.timestamp.desc()).first()
-
-    # Toggle logic: if none today or last was 'out', then 'in'. Else 'out'.
-    new_type = "in"
-    if last_attendance and last_attendance.attendance_type == "in":
-        new_type = "out"
 
     # Status logic for 'in' type
     status = None

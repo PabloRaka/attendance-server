@@ -4,7 +4,7 @@ from sqlalchemy import func as sql_func
 from app import models
 from app.database import get_db
 from app.api.deps import get_current_user
-from app.schemas.user import User as UserSchema
+from app.schemas.user import User as UserSchema, TutorialStatusUpdate
 from app.schemas.pagination import PaginatedResponse
 from app.services import face_service, s3_service
 from app.utils.auth import get_password_hash, verify_password
@@ -16,6 +16,18 @@ router = APIRouter(prefix="/api/user", tags=["Users"])
 
 @router.get("/profile", response_model=UserSchema)
 async def get_profile(current_user: models.User = Depends(get_current_user)):
+    return current_user
+
+
+@router.patch("/tutorial-status", response_model=UserSchema)
+async def update_tutorial_status(
+    payload: TutorialStatusUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    current_user.has_seen_tutorial = payload.has_seen_tutorial
+    db.commit()
+    db.refresh(current_user)
     return current_user
 
 
@@ -94,5 +106,4 @@ async def get_face_photo(current_user: models.User = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Face photo not found")
     
     return Response(content=current_user.face_image, media_type="image/jpeg")
-
 

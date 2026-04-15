@@ -12,6 +12,7 @@ from app.api.deps import get_admin_user
 from app.schemas.user import User as UserSchema, UserUpdate
 from app.schemas.pagination import PaginatedResponse
 from app.services import face_service, s3_service
+from app.api.api_v1.attendance import get_today_attendance_state
 from app.utils.auth import get_password_hash
 from sqlalchemy import or_
 import math
@@ -238,6 +239,17 @@ async def admin_force_attendance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    today_state = get_today_attendance_state(db, user.id)
+
+    if attendance_type == "in" and today_state["attendance_in"]:
+        raise HTTPException(status_code=400, detail="User sudah melakukan absen masuk hari ini")
+
+    if attendance_type == "out" and not today_state["attendance_in"]:
+        raise HTTPException(status_code=400, detail="User belum melakukan absen masuk hari ini")
+
+    if attendance_type == "out" and today_state["attendance_out"]:
+        raise HTTPException(status_code=400, detail="User sudah melakukan absen keluar hari ini")
+
     # Status logic for 'in' type
     status = None
     if attendance_type == "in":
@@ -362,5 +374,3 @@ async def admin_trigger_auto_checkout(
     """Admin-only: Manually trigger the 23:00 WIB auto check-out logic for testing."""
     count = await perform_auto_checkout()
     return {"status": "success", "message": f"Auto check-out processed for {count} users"}
-
-
