@@ -17,9 +17,14 @@ class UserUpdate(BaseModel):
 class User(UserBase):
     id: int
     has_face: Optional[bool] = None
+    has_seen_tutorial: bool = False
 
     class Config:
         from_attributes = True
+
+
+class TutorialStatusUpdate(BaseModel):
+    has_seen_tutorial: bool
 
 
 class Token(BaseModel):

@@ -9,6 +9,18 @@ from ..schemas.user import TokenData
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
+
+def resolve_token_username(payload: dict) -> str | None:
+    data_obj = payload.get("data", {})
+    return (
+        payload.get("username_akun")
+        or data_obj.get("username_akun")
+        or payload.get("npm_akun")
+        or data_obj.get("npm_akun")
+        or payload.get("username")
+        or payload.get("npm")
+    )
+
 def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -17,19 +29,10 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     )
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        # External token often uses 'sub' for internal ID, check username/npm first
-        username: str = (
-            payload.get("username_akun") or 
-            payload.get("npm_akun") or 
-            payload.get("username") or 
-            payload.get("npm") or 
-            payload.get("sub") or
-            # Check nested data if flat get fails
-            payload.get("data", {}).get("username_akun") or
-            payload.get("data", {}).get("npm_akun")
-        )
+        username = resolve_token_username(payload)
+        external_auth_id = str(payload.get("sub")) if payload.get("sub") is not None else None
 
-        if username is None:
+        if username is None and external_auth_id is None:
             raise credentials_exception
             
         # Get extra info if available in token for JIT provisioning
@@ -52,15 +55,20 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         role = payload.get("role") or "user"
         
         # Force admin role for superadmin accounts to avoid JIT downgrade
-        if username.lower() in ["superadmin", "1"]:
+        if username and username.lower() in ["superadmin", "1"]:
             role = "admin"
 
         
         token_data = TokenData(username=username)
     except JWTError:
         raise credentials_exception
-        
-    user = db.query(User).filter(User.username == token_data.username).first()
+
+    user = None
+    if external_auth_id is not None:
+        user = db.query(User).filter(User.external_auth_id == external_auth_id).first()
+
+    if not user and token_data.username is not None:
+        user = db.query(User).filter(User.username == token_data.username).first()
     
     # JIT Provisioning & Sync: if user exists, sync name/role. If not exists, create.
     if user:
@@ -70,10 +78,6 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         if fullname_from_token and user.fullname != fullname_from_token:
             user.fullname = fullname_from_token
             changed = True
-        if user.role != role:
-            user.role = role
-            changed = True
-        
         if changed:
             try:
                 db.commit()
@@ -86,7 +90,8 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     else:
         # Create new user (JIT Provisioning)
         user = User(
-            username=username,
+            username=token_data.username or external_auth_id,
+            external_auth_id=external_auth_id,
             fullname=fullname,
             role=role,
             hashed_password="EXTERNAL_AUTH" # Local password not needed

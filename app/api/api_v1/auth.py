@@ -10,6 +10,16 @@ from app.services.external_auth_service import external_auth_service
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
+
+def resolve_external_username(user_data: dict, fallback_username: str) -> str:
+    return str(
+        user_data.get("username_akun")
+        or user_data.get("npm_akun")
+        or user_data.get("username")
+        or user_data.get("npm")
+        or fallback_username
+    )
+
 # @router.post("/register", response_model=UserSchema)
 # async def register_user(
 #     username: str = Form(...),
@@ -70,8 +80,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 
         # Sync user info from body (Since it's not and actually missing in the JWT token payload)
         user_data = external_data.get("data", {}).get("user", {})
-        # Use id_user as the identifier to match JWT 'sub' claim used in deps.py
         ext_id = str(user_data.get("id_user") or user_data.get("id") or form_data.username)
+        external_username = resolve_external_username(user_data, form_data.username)
         fullname = user_data.get("nama_lengkap_akun") or user_data.get("fullname") or user_data.get("name") or ext_id
         
         # Defensive role extraction
@@ -83,18 +93,25 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
             role = "admin"
 
         # Sync user to local DB immediately
-        user = db.query(models.User).filter(models.User.username == ext_id).first()
+        user = db.query(models.User).filter(models.User.external_auth_id == ext_id).first()
+        if not user:
+            # Backward compatibility for older rows that used external id in `username`
+            user = db.query(models.User).filter(models.User.username == ext_id).first()
+        if not user:
+            user = db.query(models.User).filter(models.User.username == external_username).first()
         if not user:
             user = models.User(
-                username=ext_id,
+                username=external_username,
+                external_auth_id=ext_id,
                 fullname=fullname,
                 role=role,
                 hashed_password="EXTERNAL_AUTH"
             )
             db.add(user)
         else:
+            user.username = external_username
+            user.external_auth_id = ext_id
             user.fullname = fullname
-            user.role = role
         
         try:
             db.commit()
