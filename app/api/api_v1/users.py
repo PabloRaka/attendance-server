@@ -84,19 +84,7 @@ async def get_attendance_history(
     }
 
 
-@router.post("/change-password")
-async def change_password(
-    current_password: str = Form(...),
-    new_password: str = Form(...),
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if not verify_password(current_password, current_user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect current password")
-    
-    current_user.hashed_password = get_password_hash(new_password)
-    db.commit()
-    return {"message": "Password updated successfully"}
+
 
 
 @router.get("/face-photo")
