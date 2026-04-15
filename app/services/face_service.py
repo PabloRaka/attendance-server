@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import asyncio
 import logging
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +12,7 @@ _ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets",
 _YUNET_PATH  = os.path.join(_ASSETS_DIR, "face_detection_yunet_2023mar.onnx")
 _SFACE_PATH  = os.path.join(_ASSETS_DIR, "face_recognition_sface_2021dec.onnx")
 _LIVENESS_PATH = os.path.join(_ASSETS_DIR, "MiniFASNetV2.onnx")
+_ai_semaphore = asyncio.Semaphore(2)
 
 # Validate model files exist
 if not os.path.exists(_YUNET_PATH):
@@ -114,69 +116,79 @@ def _check_liveness(image: np.ndarray, face_box) -> bool:
     if roi_gray.size > 0:
         blur_score = cv2.Laplacian(roi_gray, cv2.CV_64F).var()
         logger.info("Liveness: Laplacian Variance = %.2f", blur_score)
-        # Lowered threshold to 5 to avoid false positives with softer cameras or low light.
-        if blur_score < 5:
+        # Lowered threshold to avoid false positives with softer cameras or low light.
+        # Threshold is now configurable via .env (FACE_LIVENESS_BLUR_THRESHOLD).
+        if blur_score < settings.FACE_LIVENESS_BLUR_THRESHOLD:
             logger.warning("Liveness: Laplacian check failed (score: %.2f)", blur_score)
             raise LivenessError("Kualitas foto rendah atau terdeteksi layar (Blur)")
 
-    # ── 2. MiniFASNetV2 (Deep Learning Anti-Spoofing) ──
-    try:
-        # Scale 2.7 crop as expected by the model
-        cx, cy = x_b + w_b / 2, y_b + h_b / 2
-        new_size = max(w_b, h_b) * 2.7
-        x1 = int(cx - new_size / 2)
-        y1 = int(cy - new_size / 2)
-        x2 = int(x1 + new_size)
-        y2 = int(y1 + new_size)
-        
-        # Crop and pad with black if out of bounds
-        xi1, yi1 = max(0, x1), max(0, y1)
-        xi2, yi2 = min(iw, x2), min(ih, y2)
-        
-        face_img = image[yi1:yi2, xi1:xi2]
-        if face_img.size == 0:
+        # ── 2. MiniFASNetV2 (Deep Learning Anti-Spoofing) ──
+        if not settings.FACE_LIVENESS_MODEL_ENABLED:
+            logger.info("Liveness: DL Model check disabled via config.")
             return True
 
-        # If crop was smaller than new_size, pad it
-        if xi2 - xi1 < x2 - x1 or yi2 - yi1 < y2 - y1:
-            pad_top = max(0, yi1 - y1)
-            pad_bottom = max(0, y2 - yi2)
-            pad_left = max(0, xi1 - x1)
-            pad_right = max(0, x2 - xi2)
-            face_img = cv2.copyMakeBorder(face_img, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=[0,0,0])
-
-        # Resize to 80x80 as expected
-        face_img = cv2.resize(face_img, (80, 80))
-        # model expects BGR, [0, 255], float32, NCHW
-        face_img = face_img.astype(np.float32)
-        
-        # Convert to NCHW format (1, 3, 80, 80)
-        blob = np.transpose(face_img, (2, 0, 1)) # HWC -> CHW
-        blob = np.expand_dims(blob, axis=0)      # CHW -> NCHW
-        
-        net = _get_liveness_net()
-        net.setInput(blob)
-        preds = net.forward() # Output shape (1, 3)
-        
-        # Simple softmax to log probabilities
-        probs = np.exp(preds[0]) / np.sum(np.exp(preds[0]))
-        label = np.argmax(preds[0])
-        score = probs[label]
-        
-        logger.info("Liveness: DL Model result = %d (prob: %.4f)", label, score)
-        
-        # In this model (yakhyo/Silent-Face-Anti-Spoofing), 1 is REAL.
-        if label != 1:
-            logger.warning("Liveness: DL Model detected SPOOF (label: %d, prob: %.4f)", label, score)
-            raise LivenessError("Kecurangan terdeteksi (Anti-Spoofing)")
+        try:
+            # Scale 2.7 crop as expected by the model
+            cx, cy = x_b + w_b / 2, y_b + h_b / 2
+            new_size = max(w_b, h_b) * 2.7
+            x1 = int(cx - new_size / 2)
+            y1 = int(cy - new_size / 2)
+            x2 = int(x1 + new_size)
+            y2 = int(y1 + new_size)
             
-    except LivenessError:
-        raise
-    except Exception as e:
-        logger.error("Liveness check error: %s", e)
-        return True
+            # Crop and pad with black if out of bounds
+            xi1, yi1 = max(0, x1), max(0, y1)
+            xi2, yi2 = min(iw, x2), min(ih, y2)
+            
+            face_img = image[yi1:yi2, xi1:xi2]
+            if face_img.size == 0:
+                return True
 
-    return True
+            # If crop was smaller than new_size, pad it
+            if xi2 - xi1 < x2 - x1 or yi2 - yi1 < y2 - y1:
+                pad_top = max(0, yi1 - y1)
+                pad_bottom = max(0, y2 - yi2)
+                pad_left = max(0, xi1 - x1)
+                pad_right = max(0, x2 - xi2)
+                face_img = cv2.copyMakeBorder(face_img, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=[0,0,0])
+
+            # Resize to 80x80 as expected
+            face_img = cv2.resize(face_img, (80, 80))
+            # model expects BGR, [0, 255], float32, NCHW
+            face_img = face_img.astype(np.float32)
+            
+            # Convert to NCHW format (1, 3, 80, 80)
+            blob = np.transpose(face_img, (2, 0, 1)) # HWC -> CHW
+            blob = np.expand_dims(blob, axis=0)      # CHW -> NCHW
+            
+            net = _get_liveness_net()
+            net.setInput(blob)
+            preds = net.forward() # Output shape (1, 3)
+            
+            # Softmax to log probabilities
+            probs = np.exp(preds[0]) / np.sum(np.exp(preds[0]))
+            label = np.argmax(preds[0])
+            score = probs[label]
+            
+            logger.info("Liveness: DL Model result = %d (prob: %.4f)", label, score)
+            
+            # In this model (yakhyo/Silent-Face-Anti-Spoofing), 1 is REAL.
+            # We only reject if label is NOT 1 AND our confidence (score) is above the threshold.
+            if label != 1:
+                if score >= settings.FACE_LIVENESS_MODEL_THRESHOLD:
+                    logger.warning("Liveness: DL Model detected SPOOF (label: %d, prob: %.4f) - REJECTED", label, score)
+                    raise LivenessError("Kecurangan terdeteksi (Anti-Spoofing)")
+                else:
+                    logger.info("Liveness: DL Model detected SPOOF (label: %d, prob: %.4f) but score < %.2f - ALLOWED", 
+                                label, score, settings.FACE_LIVENESS_MODEL_THRESHOLD)
+            
+        except LivenessError:
+            raise
+        except Exception as e:
+            logger.error("Liveness check error: %s", e)
+            return True
+
+        return True
 
 
 # ── Public API ────────────────────────────────────────────────────────────────────
@@ -211,42 +223,74 @@ def _process_binary_sync(image_bytes: bytes) -> bytes | None:
 
 async def process_and_crop_binary(image_bytes: bytes) -> bytes | None:
     """Async wrapper – offloads CPU work to a thread pool."""
-    return await asyncio.to_thread(_process_binary_sync, image_bytes)
+    async with _ai_semaphore:
+        return await asyncio.to_thread(_process_binary_sync, image_bytes)
 
 
-def _compare_faces_sync(stored_bytes: bytes, capture_bytes: bytes) -> float:
+def _extract_embedding_sync(image_bytes: bytes) -> np.ndarray | None:
+    """Extract 128-d face embedding from image bytes."""
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    
+    face_box = _detect_face(image)
+    if face_box is None:
+        return None
+        
+    return _align_and_encode(image, face_box)
+
+
+async def async_extract_embedding(image_bytes: bytes) -> bytes | None:
+    """Async wrapper for embedding extraction. Returns bytes of the numpy array."""
+    async with _ai_semaphore:
+        feat = await asyncio.to_thread(_extract_embedding_sync, image_bytes)
+        if feat is None:
+            return None
+        return feat.tobytes()
+
+
+def _compare_faces_sync(
+    stored_source: bytes, 
+    capture_bytes: bytes, 
+    is_embedding: bool = False
+) -> float:
     """
     Core synchronous comparison.
-    Returns cosine similarity in [0, 1], or 0.0 on error.
+    If is_embedding is True, stored_source is the raw float vector (bytes).
+    Otherwise, stored_source is the original profile image (bytes).
     """
     def _decode(b):
         arr = np.frombuffer(b, np.uint8)
         return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-    stored_img  = _decode(stored_bytes)
     capture_img = _decode(capture_bytes)
-
-    if stored_img is None or capture_img is None:
+    if capture_img is None:
         return 0.0
 
-    stored_box  = _detect_face(stored_img)
     capture_box = _detect_face(capture_img)
-
-    if stored_box is None or capture_box is None:
-        logger.warning(
-            "compare_faces: face not found – stored=%s capture=%s",
-            stored_box is None, capture_box is None,
-        )
+    if capture_box is None:
+        logger.warning("compare_faces: face not found in capture")
         return 0.0
 
-    feat_stored  = _align_and_encode(stored_img, stored_box)
     feat_capture = _align_and_encode(capture_img, capture_box)
-
-    if feat_stored is None or feat_capture is None:
+    if feat_capture is None:
         return 0.0
+
+    # Get stored feature
+    if is_embedding:
+        # stored_source is already the embedding vector
+        feat_stored = np.frombuffer(stored_source, dtype=np.float32).reshape(1, 128)
+    else:
+        # stored_source is the original image, must extract again (legacy/fallback)
+        stored_img = _decode(stored_source)
+        if stored_img is None: return 0.0
+        stored_box  = _detect_face(stored_img)
+        if stored_box is None: return 0.0
+        feat_stored  = _align_and_encode(stored_img, stored_box)
+        if feat_stored is None: return 0.0
 
     # ── Anti-Spoofing Check (LIVENESS) ──
-    # Only check liveness on the captured image, not the stored one.
     _check_liveness(capture_img, capture_box)
 
     sim = _cosine_similarity(feat_stored, feat_capture)
@@ -254,14 +298,19 @@ def _compare_faces_sync(stored_bytes: bytes, capture_bytes: bytes) -> float:
     return sim
 
 
-async def async_compare_faces(stored_bytes: bytes, capture_bytes: bytes) -> float:
-    """Async wrapper – offloads CPU work to a thread pool."""
-    return await asyncio.to_thread(_compare_faces_sync, stored_bytes, capture_bytes)
+async def async_compare_faces(
+    stored_source: bytes, 
+    capture_bytes: bytes, 
+    is_embedding: bool = False
+) -> float:
+    """Async wrapper – offloads CPU work to a thread pool with concurrency limit."""
+    async with _ai_semaphore:
+        return await asyncio.to_thread(_compare_faces_sync, stored_source, capture_bytes, is_embedding)
 
 
-# ── Legacy shim (used by older code paths that pass a numpy array) ─────────────
+# ── Legacy shim ───────────────────────────────────────────────────────────────
 def compare_faces_binary(stored_bytes: bytes, capture_array: np.ndarray) -> float:
-    """Kept for backward-compatibility. Encodes the array and delegates."""
+    """Kept for backward-compatibility."""
     success, buf = cv2.imencode(".jpg", capture_array)
     if not success:
         return 0.0

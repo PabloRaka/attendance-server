@@ -182,15 +182,22 @@ async def admin_update_face(
         raise HTTPException(status_code=404, detail="User not found")
 
     contents = await file.read()
+    # 1. Process and crop for display
     face_binary = await face_service.process_and_crop_binary(contents)
     if not face_binary:
         raise HTTPException(status_code=400, detail="Wajah tidak terdeteksi")
 
-    # Save binary directly to DB
+    # 2. Extract embedding for matching
+    embedding = await face_service.async_extract_embedding(contents)
+    if not embedding:
+        raise HTTPException(status_code=400, detail="Gagal mengonversi wajah ke vektor")
+
+    # Save both to DB
     user.face_image = face_binary
+    user.face_embedding = embedding
     db.commit()
     db.refresh(user)
-    return {"status": "success", "message": f"Face photo for {user.username} updated"}
+    return {"status": "success", "message": f"Face photo and embedding for {user.username} updated"}
 
 
 @router.put("/user/{user_id}")
