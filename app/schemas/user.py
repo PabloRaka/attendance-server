@@ -3,7 +3,7 @@ from typing import Optional
 
 class UserBase(BaseModel):
     username: str
-    fullname: str
+    fullname: Optional[str] = None
     role: str = "user"
 
 class UserCreate(UserBase):
