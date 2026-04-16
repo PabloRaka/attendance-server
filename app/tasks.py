@@ -2,12 +2,58 @@ import asyncio
 import logging
 from datetime import datetime, date, timedelta, timezone
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 from .database import SessionLocal
 from . import models
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+AUTO_CHECKOUT_LOCK_KEY = 2300
+WIB_TIMEZONE = timezone(timedelta(hours=7))
+
+
+def _get_wib_today() -> date:
+    return datetime.now(WIB_TIMEZONE).date()
+
+
+def _try_acquire_auto_checkout_lock(db: Session) -> bool:
+    bind = db.get_bind()
+    dialect = bind.dialect.name if bind else ""
+
+    if dialect.startswith("postgresql"):
+        return bool(
+            db.execute(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": AUTO_CHECKOUT_LOCK_KEY},
+            ).scalar()
+        )
+
+    return True
+
+
+def _release_auto_checkout_lock(db: Session) -> None:
+    bind = db.get_bind()
+    dialect = bind.dialect.name if bind else ""
+
+    if dialect.startswith("postgresql"):
+        db.execute(
+            text("SELECT pg_advisory_unlock(:key)"),
+            {"key": AUTO_CHECKOUT_LOCK_KEY},
+        )
+
+
+def _has_checkout_for_date(db: Session, user_id: int, target_date: date) -> bool:
+    return (
+        db.query(models.Attendance.id)
+        .filter(
+            models.Attendance.user_id == user_id,
+            func.date(models.Attendance.timestamp) == target_date,
+            models.Attendance.attendance_type == "out",
+        )
+        .first()
+        is not None
+    )
 
 async def perform_auto_checkout():
     """
@@ -16,7 +62,11 @@ async def perform_auto_checkout():
     """
     db = SessionLocal()
     try:
-        today = date.today()
+        if not _try_acquire_auto_checkout_lock(db):
+            logger.info("Auto check-out skipped because another process holds the scheduler lock.")
+            return 0
+
+        today = _get_wib_today()
         logger.info(f"Starting auto check-out for date: {today}")
         
         # 1. Get all user IDs
@@ -31,8 +81,12 @@ async def perform_auto_checkout():
                 func.date(models.Attendance.timestamp) == today
             ).order_by(models.Attendance.timestamp.desc()).first()
             
-            # 3. If latest is 'in', then auto-checkout
-            if last_record and last_record.attendance_type == "in":
+            # 3. Only create one automatic check-out per user per day.
+            if (
+                last_record
+                and last_record.attendance_type == "in"
+                and not _has_checkout_for_date(db, user_id, today)
+            ):
                 new_record = models.Attendance(
                     user_id=user_id,
                     method="system_auto",
@@ -50,6 +104,10 @@ async def perform_auto_checkout():
         db.rollback()
         return 0
     finally:
+        try:
+            _release_auto_checkout_lock(db)
+        except Exception as lock_error:
+            logger.warning(f"Failed to release auto check-out lock: {lock_error}")
         db.close()
 
 async def scheduler_loop():
@@ -61,8 +119,7 @@ async def scheduler_loop():
     while True:
         try:
             # Get current time in WIB (UTC+7)
-            wib_timezone = timezone(timedelta(hours=7))
-            now_wib = datetime.now(wib_timezone)
+            now_wib = datetime.now(WIB_TIMEZONE)
             
             # Check if it's 23:00 (11 PM)
             if now_wib.hour == 23 and now_wib.minute == 0:

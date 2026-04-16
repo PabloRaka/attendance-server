@@ -46,10 +46,14 @@ app.include_router(admin.router)
 
 from .tasks import scheduler_loop
 
+_scheduler_task = None
+
 @app.on_event("startup")
 async def startup_event():
-    # Start the background task
-    asyncio.create_task(scheduler_loop())
+    global _scheduler_task
+    if _scheduler_task and not _scheduler_task.done():
+        return
+    _scheduler_task = asyncio.create_task(scheduler_loop())
 
 @app.get("/")
 async def root():

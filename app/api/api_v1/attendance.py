@@ -170,6 +170,15 @@ async def attendance_face(
             detail="Foto wajah belum diupload. Silakan upload foto wajah di halaman Profile terlebih dahulu."
         )
 
+    latitude = latitude.strip() if latitude else None
+    longitude = longitude.strip() if longitude else None
+
+    if not latitude or not longitude:
+        raise HTTPException(
+            status_code=400,
+            detail="Lokasi wajib diaktifkan. Izinkan akses lokasi di browser lalu coba lagi."
+        )
+
     contents = await file.read()
     try:
         # Use cached embedding if available (much faster)
