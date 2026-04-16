@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Response, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Query, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, RedirectResponse
 import io
 from openpyxl import Workbook
@@ -58,6 +58,54 @@ async def admin_get_user_logs(
         models.Attendance.user_id == user_id
     ).order_by(models.Attendance.timestamp.desc()).all()
     return logs
+
+
+@router.post("/users", response_model=UserSchema)
+async def admin_create_user(
+    username: str = Form(...),
+    password: str = Form(...),
+    fullname: str = Form(...),
+    role: str = Form("user"),
+    file: UploadFile = File(None),
+    admin: models.User = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Admin-only: Create a new local user with optional face image."""
+    # Check if user exists
+    existing_user = db.query(models.User).filter(models.User.username == username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username sudah terdaftar")
+
+    new_user = models.User(
+        username=username,
+        fullname=fullname,
+        hashed_password=get_password_hash(password),
+        role=role
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    # If a face photo was provided, process and save it
+    if file and file.filename:
+        try:
+            contents = await file.read()
+            # 1. Process and crop for display
+            face_binary = await face_service.process_and_crop_binary(contents)
+            if face_binary:
+                # 2. Extract embedding for matching
+                embedding = await face_service.async_extract_embedding(contents)
+                if embedding:
+                    new_user.face_image = face_binary
+                    new_user.face_embedding = embedding
+                    db.commit()
+                    db.refresh(new_user)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to process face on user creation: {e}")
+            # We still return the user, just without the face if it failed
+
+    return new_user
 
 
 from datetime import datetime, timedelta, timezone
