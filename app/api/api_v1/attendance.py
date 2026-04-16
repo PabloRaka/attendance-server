@@ -176,7 +176,7 @@ async def attendance_face(
     if not latitude or not longitude:
         raise HTTPException(
             status_code=400,
-            detail="Lokasi wajib diaktifkan. Izinkan akses lokasi di browser lalu coba lagi."
+            detail="GPS wajib diaktifkan. Izinkan akses lokasi di browser lalu coba lagi."
         )
 
     contents = await file.read()
