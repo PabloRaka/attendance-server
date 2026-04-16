@@ -62,6 +62,8 @@ async def admin_get_user_logs(
 
 from datetime import datetime, timedelta, timezone
 
+WIB_TZ = timezone(timedelta(hours=7))
+
 @router.get("/logs")
 async def admin_get_all_logs(
     start_date: Optional[str] = Query(None),
@@ -82,16 +84,16 @@ async def admin_get_all_logs(
             models.User.username.ilike(search_term)
         ))
 
-    # We assume the user is in WIB (UTC+7). 
+    # Use WIB for date boundaries
     if start_date and start_date.strip():
-        local_start = datetime.strptime(start_date, "%Y-%m-%d")
-        utc_start = local_start - timedelta(hours=7)
-        query = query.filter(models.Attendance.timestamp >= utc_start)
+        # Treat naive date as WIB 00:00:00
+        local_start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=WIB_TZ)
+        query = query.filter(models.Attendance.timestamp >= local_start)
         
     if end_date and end_date.strip():
-        local_end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-        utc_end = local_end - timedelta(hours=7)
-        query = query.filter(models.Attendance.timestamp < utc_end)
+        # Treat naive date as WIB 23:59:59 (by adding 1 day)
+        local_end = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=WIB_TZ) + timedelta(days=1)
+        query = query.filter(models.Attendance.timestamp < local_end)
         
     total = query.count()
     results = query.order_by(models.Attendance.timestamp.desc())\
@@ -295,14 +297,12 @@ async def admin_export_excel(
         ))
     
     if start_date and start_date.strip():
-        local_start = datetime.strptime(start_date, "%Y-%m-%d")
-        utc_start = local_start - timedelta(hours=7)
-        query = query.filter(models.Attendance.timestamp >= utc_start)
+        local_start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=WIB_TZ)
+        query = query.filter(models.Attendance.timestamp >= local_start)
         
     if end_date and end_date.strip():
-        local_end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-        utc_end = local_end - timedelta(hours=7)
-        query = query.filter(models.Attendance.timestamp < utc_end)
+        local_end = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=WIB_TZ) + timedelta(days=1)
+        query = query.filter(models.Attendance.timestamp < local_end)
         
     results = query.order_by(models.Attendance.timestamp.desc()).all()
 
@@ -318,12 +318,17 @@ async def admin_export_excel(
     # Header Styling
     for cell in ws[1]:
         cell.font = Font(bold=True)
-
     # Data Rows
     for i, res in enumerate(results, start=1):
-        # res.Attendance.timestamp is UTC
+        # res.Attendance.timestamp may be aware or naive
         # Convert to local WIB for display
-        local_time = res.Attendance.timestamp + timedelta(hours=7)
+        ts = res.Attendance.timestamp
+        if ts.tzinfo is None:
+            # If naive, we assume it is already WIB as the server is in WIB
+            local_time = ts
+        else:
+            # If aware, convert to WIB
+            local_time = ts.astimezone(WIB_TZ)
         
         row = [
             i,
