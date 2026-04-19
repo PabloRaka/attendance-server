@@ -280,7 +280,7 @@ async def admin_update_user(
 @router.post("/user/{user_id}/force-attendance")
 async def admin_force_attendance(
     user_id: int,
-    attendance_type: str = Query(..., regex="^(in|out)$"),
+    attendance_type: str = Query(..., pattern="^(in|out)$"),
     admin: models.User = Depends(get_admin_user),
     db: Session = Depends(get_db)
 ):

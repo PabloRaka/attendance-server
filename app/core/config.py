@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     FACE_LIVENESS_MODEL_THRESHOLD: float = float(
         os.getenv("FACE_LIVENESS_MODEL_THRESHOLD", "0.90")
     )
+    
+    # Auto Check-out Configuration
+    AUTO_CHECKOUT_HOUR: int = int(os.getenv("AUTO_CHECKOUT_HOUR", 23))
+    AUTO_CHECKOUT_MINUTE: int = int(os.getenv("AUTO_CHECKOUT_MINUTE", 0))
 
     # S3 Configuration
     S3_ACCESS_KEY_ID: str | None = os.getenv("S3_ACCESS_KEY_ID")

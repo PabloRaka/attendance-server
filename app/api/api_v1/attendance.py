@@ -14,12 +14,25 @@ from app.services import face_service, s3_service, location_service
 from app.core.config import settings
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
+WIB_TIMEZONE = timezone(timedelta(hours=7))
 
 def get_today_attendance_state(db: Session, user_id: int, target_date: date = None):
-    target_date = target_date or date.today()
+    # Use WIB today by default
+    target_date = target_date or datetime.now(WIB_TIMEZONE).date()
+    
+    bind = db.get_bind()
+    dialect = bind.dialect.name if bind else ""
+    
+    if dialect.startswith("postgresql"):
+        # Explicitly convert to Asia/Jakarta for correct date comparison
+        date_filter = sql_func.date(sql_func.timezone('Asia/Jakarta', models.Attendance.timestamp))
+    else:
+        # Fallback for SQLite
+        date_filter = sql_func.date(models.Attendance.timestamp) or sql_func.DATE(models.Attendance.timestamp)
+
     today_attendances = db.query(models.Attendance).filter(
         models.Attendance.user_id == user_id,
-        sql_func.date(models.Attendance.timestamp) == target_date
+        date_filter == target_date
     ).order_by(models.Attendance.timestamp.asc()).all()
 
     attendance_in = next((attendance for attendance in today_attendances if attendance.attendance_type == "in"), None)
@@ -60,9 +73,7 @@ async def record_attendance(db: Session, user_id: int, method: str, latitude: st
     # Status logic for 'in' type
     status = None
     if new_type == "in":
-        # Get current time in WIB (UTC+7)
-        wib_timezone = timezone(timedelta(hours=7))
-        now_wib = datetime.now(wib_timezone)
+        now_wib = datetime.now(WIB_TIMEZONE)
         
         # Check if past 08:15
         if now_wib.hour > 8 or (now_wib.hour == 8 and now_wib.minute > 15):
